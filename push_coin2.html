@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D 推硬幣遊戲</title>
+<style>
+  body { margin: 0; overflow: hidden; }
+  canvas { display: block; width: 200%; height: 200%; transform: scale(0.5); transform-origin: top left; }
+</style>
+</head>
+<body>
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
+<script>
+  // 創建場景、相機和引擎
+  const canvas = document.createElement("canvas");
+  document.body.appendChild(canvas);
+  const engine = new BABYLON.Engine(canvas, true);
+  const createScene = function () {
+    const scene = new BABYLON.Scene(engine);
+
+    // 創建相機
+    const camera = new BABYLON.ArcRotateCamera("camera", Math.PI / 2, Math.PI / 4, 10, BABYLON.Vector3.Zero(), scene);
+    camera.attachControl(canvas, true);
+
+    // 創建光源
+    const light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
+
+    // 創建固定平台
+    const basePlatform = BABYLON.MeshBuilder.CreateBox("basePlatform", { width: 15, height: 0.5, depth: 10 }, scene);
+    const basePlatformMaterial = new BABYLON.StandardMaterial("basePlatformMaterial", scene);
+    basePlatformMaterial.diffuseColor = new BABYLON.Color3(0.8, 0.8, 0.8);
+    basePlatform.material = basePlatformMaterial;
+    basePlatform.position.y = -1.5;
+
+    // 創建移動平台
+    const platform = BABYLON.MeshBuilder.CreateBox("platform", { width: 10, height: 0.5, depth: 10 }, scene);
+    const platformMaterial = new BABYLON.StandardMaterial("platformMaterial", scene);
+    platformMaterial.diffuseColor = new BABYLON.Color3(0.55, 0.27, 0.07);
+    platform.material = platformMaterial;
+    platform.position.y = -1;
+    platform.position.z = -8;
+
+    // 創建出口
+    const exit = BABYLON.MeshBuilder.CreateBox("exit", { width: 2, height: 1, depth: 0.5 }, scene);
+    const exitMaterial = new BABYLON.StandardMaterial("exitMaterial", scene);
+    exitMaterial.diffuseColor = new BABYLON.Color3(0, 1, 0);
+    exit.material = exitMaterial;
+    exit.position.set(0, 0, 6); // 調整出口位置到平台對面
+
+    // 創建矮牆
+    const wallHeight = 2;
+    const wallDepth = 0.5;
+    const wallWidth = 15;
+
+    // 前牆
+    const frontWall = BABYLON.MeshBuilder.CreateBox("frontWall", { width: wallWidth, height: wallHeight, depth: wallDepth }, scene);
+    const frontWallMaterial = new BABYLON.StandardMaterial("frontWallMaterial", scene);
+    frontWallMaterial.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.5);
+    frontWall.material = frontWallMaterial;
+    frontWall.position.set(0, wallHeight / 2 - .75, -5); // 往下調一個單位
+
+    // 左牆
+    const leftWall = BABYLON.MeshBuilder.CreateBox("leftWall", { width: wallDepth, height: wallHeight, depth: 10 }, scene);
+    const leftWallMaterial = new BABYLON.StandardMaterial("leftWallMaterial", scene);
+    leftWallMaterial.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.5);
+    leftWall.material = leftWallMaterial;
+    leftWall.position.set(-7.5, wallHeight / 2 - 2, 0); // 往下調一個單位
+
+    // 右牆
+    const rightWall = BABYLON.MeshBuilder.CreateBox("rightWall", { width: wallDepth, height: wallHeight, depth: 10 }, scene);
+    const rightWallMaterial = new BABYLON.StandardMaterial("rightWallMaterial", scene);
+    rightWallMaterial.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.5);
+    rightWall.material = rightWallMaterial;
+    rightWall.position.set(7.5, wallHeight / 2 - 2, 0); // 往下調一個單位
+
+    // 標註底部平台的四個邊
+    const createLabel = (text, position, rotation) => {
+      const dynamicTexture = new BABYLON.DynamicTexture("dynamic texture", 512, scene, true);
+      dynamicTexture.hasAlpha = true;
+      dynamicTexture.drawText(text, null, 150, "bold 100px Arial", "white", "transparent", true);
+      const material = new BABYLON.StandardMaterial("material", scene);
+      material.diffuseColor = new BABYLON.Color3(0, 0, 0);
+      material.diffuseTexture = dynamicTexture;
+      material.specularColor = new BABYLON.Color3(0, 0, 0);
+      material.backFaceCulling = false;
+
+      const plane = BABYLON.MeshBuilder.CreatePlane("plane", { width: 2, height: 1 }, scene);
+      plane.material = material;
+      plane.position = position;
+      plane.rotation = rotation;
+    };
+
+    // 標註 1 (前)
+    createLabel("1", new BABYLON.Vector3(0, -0.75, -5.25), new BABYLON.Vector3(Math.PI / 2, 0, 0));
+
+    // 標註 3 (左)
+    createLabel("3", new BABYLON.Vector3(-7.75, -0.75, 0), new BABYLON.Vector3(Math.PI / 2, Math.PI / 2, 0));
+
+    // 標註 4 (右)
+    createLabel("4", new BABYLON.Vector3(7.75, -0.75, 0), new BABYLON.Vector3(Math.PI / 2, -Math.PI / 2, 0));
+
+    // 硬幣陣列
+    const coins = [];
+
+    // 物理引擎
+    const physicsPlugin = new BABYLON.CannonJSPlugin();
+    scene.enablePhysics(new BABYLON.Vector3(0, -9.81, 0), physicsPlugin);
+
+    // 為平台和出口添加物理體
+    platform.physicsImpostor = new BABYLON.PhysicsImpostor(platform, BABYLON.PhysicsImpostor.BoxImpostor, { mass: 0, friction: 0.9, restitution: 0.01 }, scene);
+    exit.physicsImpostor = new BABYLON.PhysicsImpostor(exit, BABYLON.PhysicsImpostor.BoxImpostor, { mass: 0, friction: 0.9, restitution: 0.01 }, scene);
+    basePlatform.physicsImpostor = new BABYLON.PhysicsImpostor(basePlatform, BABYLON.PhysicsImpostor.BoxImpostor, { mass: 0, friction: 0.9, restitution: 0.01 }, scene);
+
+    // 為矮牆添加物理體
+    frontWall.physicsImpostor = new BABYLON.PhysicsImpostor(frontWall, BABYLON.PhysicsImpostor.BoxImpostor, { mass: 0, friction: 0.9, restitution: 0.01 }, scene);
+    leftWall.physicsImpostor = new BABYLON.PhysicsImpostor(leftWall, BABYLON.PhysicsImpostor.BoxImpostor, { mass: 0, friction: 0.9, restitution: 0.01 }, scene);
+    rightWall.physicsImpostor = new BABYLON.PhysicsImpostor(rightWall, BABYLON.PhysicsImpostor.BoxImpostor, { mass: 0, friction: 0.9, restitution: 0.01 }, scene);
+
+    // 平台移動
+    let direction = 1;
+    scene.registerBeforeRender(function () {
+      platform.position.z += 0.03 * direction;
+      if (platform.position.z > -2 || platform.position.z < -9) {
+        direction *= -1;
+      }
+    });
+
+    // 創建硬幣
+    const createCoin = (position) => {
+      // 創建立方體來模擬硬幣
+      const coin = BABYLON.MeshBuilder.CreateBox("coin", { width: 0.4, height: 0.1, depth: 0.4 }, scene);
+      const coinMaterial = new BABYLON.StandardMaterial("coinMaterial", scene);
+      coinMaterial.diffuseColor = new BABYLON.Color3(1, 1, 0);
+      coinMaterial.alpha = 0; // 設置立方體部分為透明
+      coin.material = coinMaterial;
+
+      // 設置硬幣的位置
+      coin.position.copyFrom(position);
+
+      // 設置硬幣的慣性張量，使其不易翻滾
+      const coinInertia = new BABYLON.Vector3(1, 100, 1); // 增加 Y 軸上的慣性
+
+      coin.physicsImpostor = new BABYLON.PhysicsImpostor(coin, BABYLON.PhysicsImpostor.BoxImpostor, { mass: 1, restitution: 0.01, friction: 0.9, inertia: coinInertia }, scene);
+      coins.push(coin);
+
+      // 創建一個圓形的外觀
+      const coinGeometry = BABYLON.MeshBuilder.CreateCylinder("coinGeometry", { diameterTop: 0.4, diameterBottom: 0.4, height: 0.1, tessellation: 32 }, scene);
+      coinGeometry.parent = coin;
+      coinGeometry.position.y = 0.05; // 調整位置以避免重疊
+      coinGeometry.material = new BABYLON.StandardMaterial("coinGeometryMaterial", scene);
+      coinGeometry.material.diffuseColor = new BABYLON.Color3(1, 1, 0);
+
+      // 初始化金幣狀態
+      coin.isChildOfPlatform = false;
+      coin.stabilized = false;
+      coin.lastCollisionWithPlatform = false;
+    };
+
+    // 初始放置 500 枚硬幣在固定平台和移動平台上
+    for (let i = 0; i < 250; i++) {
+      const randomXBase = Math.random() * 1;
+      const randomZBase = Math.random() * 1;
+      createCoin(new BABYLON.Vector3(randomXBase, basePlatform.position.y + 10.3, randomZBase));
+    }
+
+    for (let i = 0; i < 250; i++) {
+      const randomXPlatform = Math.random() * 1;
+      const randomZPlatform = Math.random() * 1;
+      createCoin(new BABYLON.Vector3(randomXPlatform, platform.position.y + 10.3, randomZPlatform));
+    }
+
+    // 從大平台的後側後牆的內側上空落下硬幣
+    const dropCoinFromBasePlatformBack = () => {
+      const randomX = Math.random() * 8 - 4; // 限制在固定平台範圍內
+      const coinPosition = new BABYLON.Vector3(randomX, frontWall.position.y + 3, frontWall.position.z + 1.0); // Z 方向位置為 +0.75
+      createCoin(coinPosition);
+    };
+
+    // 點擊或按下空白鍵投放硬幣
+    canvas.addEventListener('click', (event) => {
+      dropCoinFromBasePlatformBack();
+    });
+
+    window.addEventListener('keydown', (event) => {
+      if (event.code === 'Space') {
+        dropCoinFromBasePlatformBack();
+      }
+    });
+
+    // 監聽碰撞事件
+    const platformHalfWidth = 5; // 小平台的半寬度
+    const platformHalfDepth = 5; // 小平台的半深度
+
+    coins.forEach((coin) => {
+      coin.physicsImpostor.onCollideEvent = (collider, collidedAgainst) => {
+        const coinPosition = coin.getAbsolutePosition();
+        const platformPosition = platform.getAbsolutePosition();
+
+        // 檢查是否與小平台碰撞
+        if (collidedAgainst === platform.physicsImpostor) {
+          coin.lastCollisionWithPlatform = true;
+        } else {
+          coin.lastCollisionWithPlatform = false;
+        }
+      };
+    });
+
+    // 更新金幣的位置以隨著小平台移動
+    scene.registerBeforeRender(function () {
+      coins.forEach((coin) => {
+        if (coin.physicsImpostor) {
+          const coinPosition = coin.getAbsolutePosition();
+          const platformPosition = platform.getAbsolutePosition();
+
+          // 檢查金幣是否在小平台上
+          if (!coin.isChildOfPlatform &&
+              coinPosition.y <= platformPosition.y + 0.55 && coinPosition.y >= platformPosition.y &&
+              Math.abs(coinPosition.x - platformPosition.x) <= platformHalfWidth &&
+              Math.abs(coinPosition.z - platformPosition.z) <= platformHalfDepth) {
+            // 檢查金幣是否穩定平躺
+            const velocity = coin.physicsImpostor.getLinearVelocity();
+            const angularVelocity = coin.physicsImpostor.getAngularVelocity();
+
+            if (velocity.length() < 0.1 && angularVelocity.length() < 0.1) {
+              // 將金幣設置為小平台的子物件
+              coin.setParent(platform);
+              coin.physicsImpostor.setMass(0); // 使金幣不受重力影響
+              coin.isChildOfPlatform = true;
+              coin.stabilized = true;
+            }
+          } else if (coin.isChildOfPlatform && !coin.lastCollisionWithPlatform) {
+            // 如果金幣不在小平台上，恢復正常的物理互動
+            coin.setParent(null);
+            coin.physicsImpostor.setMass(1); // 使金幣恢復受重力影響
+            coin.isChildOfPlatform = false;
+            coin.stabilized = false;
+          }
+        }
+      });
+    });
+
+    return scene;
+  };
+
+  const scene = createScene();
+
+  engine.runRenderLoop(function () {
+    scene.render();
+  });
+
+  window.addEventListener("resize", function () {
+    engine.resize();
+  });
+</script>
+</body>
+</html>
